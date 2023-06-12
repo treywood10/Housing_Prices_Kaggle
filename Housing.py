@@ -7,18 +7,27 @@ https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/
 """
 
 # Libraries #
-from math import ceil
+from math import ceil, exp, sqrt
 import pandas as pd
 import numpy as np
+import random as ran
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, StandardScaler
 from sklearn.impute import KNNImputer
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from sklearn.feature_selection import SelectKBest, mutual_info_regression
 from sklearn.linear_model import Ridge, Lasso
 from bayes_opt import BayesianOptimization
 from sklearn.model_selection import cross_val_score
+from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor as RFR
+from xgboost import XGBRegressor
+
+
+# Random draw of seed for random state #
+seed = int(ran.uniform(1, 9999))
+ran.seed(seed)
 
 
 # Import training data #
@@ -32,6 +41,10 @@ y = pd.DataFrame(train['SalePrice'])
 
 # Find missing values #
 missing = X.isnull().sum().sort_values(ascending = False)
+
+
+# Make matrix to compare models #
+final = pd.DataFrame(columns = ['Model', 'RMSE', 'hypers'])
 
 
 ################################
@@ -80,6 +93,46 @@ for x in basement:
 del x, basement
 
 
+# Plot of Y #
+plt.hist(y)
+mean_value = y.mean()
+median_value = y.median()
+plt.axvline(mean_value.item(), color='red', linestyle='--', label='Mean')
+plt.axvline(median_value.item(), color='blue', linestyle='--', label='Median')
+plt.xlabel('Sale Price')
+plt.ylabel('Density')
+plt.title('Histogram of Target Variable')
+
+# Add the text to the legend
+mean_legend = plt.Line2D([], [], color='red', linestyle='--', label=f"Mean: {mean_value.item():.2f}")
+median_legend = plt.Line2D([], [], color='blue', linestyle='--', label=f"Median: {median_value.item():.2f}")
+plt.legend(handles=[mean_legend, median_legend])
+
+plt.show()
+del mean_value, median_value
+
+
+# Natural log the target variable #
+y_log = np.log(y)
+
+plt.hist(y_log)
+mean_value = y_log.mean()
+median_value = y_log.median()
+plt.axvline(mean_value.item(), color='red', linestyle='--', label='Mean')
+plt.axvline(median_value.item(), color='blue', linestyle='--', label='Median')
+plt.xlabel('Sale Price')
+plt.ylabel('Density')
+plt.title('Histogram of Target Variable')
+
+# Add the text to the legend
+mean_legend = plt.Line2D([], [], color='red', linestyle='--', label=f"Mean: {mean_value.item():.2f}")
+median_legend = plt.Line2D([], [], color='blue', linestyle='--', label=f"Median: {median_value.item():.2f}")
+plt.legend(handles=[mean_legend, median_legend])
+
+plt.show()
+del mean_legend, mean_value, median_legend, median_value
+
+
 #######################
 #### Preprocessing ####
 #######################
@@ -121,12 +174,14 @@ select_num.remove('SalePrice')
 
 
 # Get mutual information of categorical features and outcome #
-fs = SelectKBest(score_func = mutual_info_classif, k = 'all')
-fs.fit(X_imp[cat_feats], np.ravel(y))
+fs = SelectKBest(score_func = mutual_info_regression, k = 'all')
+fs.fit(X_imp[cat_feats], np.ravel(y_log))
 
 
 # Sort the scores and corresponding feature names in descending order
-sorted_scores, sorted_features = zip(*sorted(zip(fs.scores_, X_imp[cat_feats].columns), reverse=True))
+sorted_scores, sorted_features = zip(*sorted(zip(fs.scores_,
+                                                 X_imp[cat_feats].columns),
+                                             reverse=True))
 
 
 # Select the top 20 features
@@ -145,7 +200,6 @@ del corr_val, fs, sorted_features, sorted_scores
 ########################
 #### Transformation ####
 ########################
-
 
 # Categorical transformer #
 cat_trans = Pipeline(steps = [
@@ -181,6 +235,455 @@ labels = select_num + enc_cat_features
 # Make df of processed data #
 X_train = pd.DataFrame(temp, columns = labels)
 del missing, temp, train, X, X_imp
+
+
+###############
+#### Ridge ####
+###############
+
+# Define objective for ridge #
+def obj_ridge(alpha, fit_intercept, solver):
+    
+    """
+    Objective function to minimize the error of the 
+    ridge regression.    
+
+    Parameters
+    ----------
+    alpha : L2 Regularization term.
+        Regularizes the coefficients. Values stipulated
+        in pbounds.
+    fit_intercept : Boolean of fit intercept.
+        Indicator of whether or not the model
+        fits an intercept.
+    solver : Solving method of ridge regression.
+        Continuous variable for selecting the best
+        solver for the regression.
+
+    Returns
+    -------
+    error : Mean squared error.
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
+    
+    # Fit intercept #
+    fit_intercept = bool(round(fit_intercept))
+    
+    # Solver #
+    if solver <= 1.0:
+        solver = 'auto'
+    elif solver <= 2.0:
+        solver = 'svd'
+    elif solver <= 3.0:
+        solver = 'cholesky'
+    elif solver <= 4.0:
+        solver = 'lsqr'
+    elif solver <= 5.0:
+        solver = 'sparse_cg'
+    elif solver <= 6.0:
+        solver = 'sag'
+    else:
+        solver = 'saga'
+    
+    # Instantiate ridge model #
+    model = Ridge(alpha=alpha, fit_intercept=fit_intercept, solver=solver,
+                  max_iter = 20000)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, y_log, cv=5,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+
+
+# Define search space #
+pbounds = {
+    'alpha': (0.0000001, 100),
+    'fit_intercept': (0, 1),
+    'solver': (0, 8),
+}
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_ridge, pbounds=pbounds, random_state=seed)
+
+# Call maximizer #
+optimizer.maximize(init_points=50, n_iter=450)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'Ridge',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
+
+
+###############
+#### Lasso ####
+###############
+
+# Define objective function for lasso #
+def obj_lasso(alpha, fit_intercept,
+              selection): 
+    
+    """
+    The objective of this function is to minimize the error
+    of the lasso function. 
+    
+    Parameters
+    ----------
+    alpha : L1 Regularization term.
+        Regularizes the coefficients. Values stipulated
+        in pbounds.
+    fit_intercept : Boolean of fit intercept.
+        Indicator of whether or not the model
+        fits an intercept.
+    selection : Dictates coefficient updates.
+        Continuous variable of using either cycle or
+        random for coefficient update.
+
+    Returns
+    -------
+    error : Mean squared error.
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+    """
+    
+    # Fit intercept #
+    fit_intercept = bool(round(fit_intercept))
+    
+    
+    # selection #
+    if selection <= 0.5:
+        selection = 'cyclic'
+    else:
+        selection = 'random'
+    
+    # Instantiate model #
+    model = Lasso(alpha = alpha, fit_intercept = fit_intercept,
+                  selection = selection,
+                  random_state = seed, max_iter = 20000)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, y_log, cv=5,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+
+
+# Define search space #
+pbounds = {
+    'alpha': (0.0000001, 100),
+    'fit_intercept': (0, 1),
+    'selection': (0, 1)
+}
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_lasso, pbounds=pbounds, random_state=seed)
+
+# Call maximizer #
+optimizer.maximize(init_points = 50, n_iter = 450)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'Lasso',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
+ 
+
+###################################
+#### Support Vector Regression ####
+###################################
+
+# Define objective functino for SVM #
+def obj_SVR(kernel, degree,
+            gamma, C, epsilon, 
+            shrinking):
+    """
+    
+
+    Parameters
+    ----------
+    kernel : Kernel used in solver.
+        String inputs that are used in optimizer.
+    degree : Degree of polyomial kernel.
+        Only used in poly alogrithm.
+    gamma : Kernel cofficient.
+        Only used in rbf, poly, and sigmoid.
+    C : L2 regularizer.
+        More regularization at smaller values.
+    epsilon : Epplison value in SVR model.
+        Specifies penalty in training loss function.
+    shrinking : Boolean value.
+        Dictates if the model uses shrinking heuristic.
+
+    Returns
+    -------
+    error : Mean squared error.
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
+    
+    # Kernel #
+    if kernel <= 1:
+        kernel = 'linear'
+    elif kernel <= 2:
+        kernel = 'poly'
+    elif kernel <= 3:
+        kernel = 'rbf'
+    else:
+        kernel = 'sigmoid'
+    
+    # Gamma #
+    if gamma <= 0.5:
+        gamma = 'scale'
+    else:
+        gamma = 'auto'
+        
+    # Shrinking #
+    shrinking = bool(round(shrinking))
+        
+    # Instantiate SVR #
+    model = SVR(kernel =  kernel, degree = int(degree),
+                gamma = gamma, C = C,
+                epsilon = epsilon, shrinking = shrinking,
+                max_iter = 50000)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=5,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+    
+
+# Define search space #
+pbounds = {
+    'kernel': (0, 4),
+    'degree': (1, 10),
+    'gamma': (0, 1),
+    'C': (0.0001, 100),
+    'epsilon': (0.0001, 100),
+    'shrinking': (0, 1)
+}
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_SVR, pbounds=pbounds, random_state=seed)
+
+
+# Call maximizer #
+optimizer.maximize(init_points = 50, n_iter = 450)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'SVR',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
+
+
+########################
+#### Random Forrest ####
+########################
+
+# Define objective function for random forest #
+def obj_RF(n_estimators, criterion,
+           min_samples_split, min_samples_leaf,
+           max_features, bootstrap, min_impurity_decrease):
+    """
+    
+
+    Parameters
+    ----------
+    n_estimators : Float
+        Number of trees to estimate in the forest.
+    criterion : String
+        How the tree measures quality of the split.
+    min_samples_split : Float
+        Minimum number of samples required to split a node.
+    min_samples_leaf : Float
+        Minimum number of samples required to be a leaf.
+    max_features : String
+        Number of features to consider when splitting.
+    bootstrap : Boolean
+        Whether bootstraps are used when building trees.
+    min_impurity_decrease : Float
+        Node is split if it decreases the impurity.
+
+    Returns
+    -------
+    error : Mean squared error.
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
+    
+    # Criterion #
+    if criterion <= 1.0:
+        criterion = 'squared_error'
+    elif criterion <= 2.0:
+        criterion = 'absolute_error'
+    elif criterion <= 3.0:
+        criterion = 'friedman_mse'
+    else:
+        criterion = 'poisson'
+        
+    # Max features #
+    if max_features <= 0.5:
+        max_features = 'sqrt'
+    else:
+        max_features = 'log2'
+        
+    # Bootstrap #
+    bootstrap = bool(round(bootstrap))
+    
+    # instantiate random forest moel #
+    model = RFR(n_estimators = int(n_estimators), criterion = criterion,
+                min_samples_split =  min_samples_split,
+                min_samples_leaf = min_samples_leaf,
+                max_features =  max_features, bootstrap =  bootstrap,
+                min_impurity_decrease = min_impurity_decrease,
+                n_jobs = -1, random_state = seed)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=5,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+
+
+# Define search space #
+pbounds = {
+    'n_estimators': (1, 1000),
+    'criterion': (0, 4),
+    'min_samples_split': (0.05, .50),
+    'min_samples_leaf': (0.05, .50),
+    'max_features': (0, 1),
+    'bootstrap': (0, 1),
+    'min_impurity_decrease': (0.001, 0.2)
+}
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_RF, pbounds=pbounds, random_state=seed)
+
+
+# Call maximizer #
+optimizer.maximize(init_points = 50, n_iter = 200)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'Random Forest',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
+
+
+############################
+#### XGBoost Regression ####
+############################
+
+# Define objective function for XGBoost regression #
+def obj_boost(n_estimators, eta, gamma, 
+              max_depth, subsample, colsample_bytree,
+              reg_lambda, alpha):
+    
+    
+    
+    # instantiate XGBoost #
+    model = XGBRegressor(n_estimators = int(n_estimators), eta = eta,
+                         gamma = gamma, max_depth = int(max_depth),
+                         subsample = subsample, colsample_bytree = colsample_bytree,
+                         reg_lambda = reg_lambda, alpha = alpha, 
+                         seed = seed)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=5,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+
+    
+# Define the search space #
+pbounds = {
+    'n_estimators': (1, 1000),
+    'eta': (0, 1),
+    'gamma': (0, 5),
+    'max_depth': (2, 10),
+    'subsample': (0.5, 1),
+    'colsample_bytree': (0.2, 1),
+    'reg_lambda': (0, 10),
+    'alpha': (0, 10)
+}
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_boost, pbounds=pbounds, random_state=seed)
+
+
+# Call maximizer #
+optimizer.maximize(init_points = 50, n_iter = 200)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'XGBoost Reg',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
 
 
 
