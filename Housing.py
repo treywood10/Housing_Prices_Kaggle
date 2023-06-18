@@ -17,17 +17,26 @@ from sklearn.impute import KNNImputer
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.feature_selection import SelectKBest, mutual_info_regression
-from sklearn.linear_model import Ridge, Lasso
+from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from bayes_opt import BayesianOptimization
 from sklearn.model_selection import cross_val_score
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor as RFR
 from xgboost import XGBRegressor
+from sklearn.neighbors import KNeighborsRegressor
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Dense, BatchNormalization
+from tensorflow.keras import optimizers
+from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
 
 
 # Random draw of seed for random state #
 seed = int(ran.uniform(1, 9999))
 ran.seed(seed)
+
+
+# Set mnumber of cross folds #
+cv = 5
 
 
 # Import training data #
@@ -292,7 +301,7 @@ def obj_ridge(alpha, fit_intercept, solver):
                   max_iter = 20000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, y_log, cv=5,
+    error = cross_val_score(model, X_train, y_log, cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -376,7 +385,7 @@ def obj_lasso(alpha, fit_intercept,
                   random_state = seed, max_iter = 20000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, y_log, cv=5,
+    error = cross_val_score(model, X_train, y_log, cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -412,13 +421,76 @@ final = final.append(
     ignore_index = True
    )
 final = final.sort_values('RMSE')
- 
+
+
+################################
+#### Elastic Net Regression ####
+################################
+
+# Define objective function for Net #
+def obj_net(alpha, l1_ratio, fit_intercept,
+            selection):
+    
+    # Vary fit intercept #
+    fit_intercept = bool(round(fit_intercept))
+
+    # Vary selection #
+    if selection <= 0.5:
+        selection = 'cyclic'
+    else:
+        selection = 'random'
+        
+    # Instantiate the model #
+    model = ElasticNet(alpha = alpha, l1_ratio = l1_ratio,
+                       fit_intercept =  fit_intercept,
+                       selection = selection, random_state = seed,
+                       max_iter = 20000)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+
+# Define search space #
+pbounds = {
+    'alpha': (0.00001, 5),
+    'l1_ratio': (0.0001, 0.999),
+    'fit_intercept': (0, 1),
+    'selection': (0, 1)
+}   
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_net, pbounds=pbounds, random_state=seed)
+
+
+# Call maximizer #
+optimizer.maximize(init_points = 50, n_iter = 450)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'ElasticNet',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE') 
+
 
 ###################################
 #### Support Vector Regression ####
 ###################################
 
-# Define objective functino for SVM #
+# Define objective function for SVM #
 def obj_SVR(kernel, degree,
             gamma, C, epsilon, 
             shrinking):
@@ -474,7 +546,7 @@ def obj_SVR(kernel, degree,
                 max_iter = 50000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=5,
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -580,7 +652,7 @@ def obj_RF(n_estimators, criterion,
                 n_jobs = -1, random_state = seed)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=5,
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -591,11 +663,11 @@ def obj_RF(n_estimators, criterion,
 pbounds = {
     'n_estimators': (1, 1000),
     'criterion': (0, 4),
-    'min_samples_split': (0.05, .50),
-    'min_samples_leaf': (0.05, .50),
+    'min_samples_split': (0.01, .90),
+    'min_samples_leaf': (0.01, .90),
     'max_features': (0, 1),
     'bootstrap': (0, 1),
-    'min_impurity_decrease': (0.001, 0.2)
+    'min_impurity_decrease': (0.001, 0.4)
 }
 
 
@@ -605,7 +677,7 @@ optimizer = BayesianOptimization(
 
 
 # Call maximizer #
-optimizer.maximize(init_points = 50, n_iter = 200)
+optimizer.maximize(init_points = 50, n_iter = 450)
 
 
 # Pull best info #
@@ -639,10 +711,10 @@ def obj_boost(n_estimators, eta, gamma,
                          gamma = gamma, max_depth = int(max_depth),
                          subsample = subsample, colsample_bytree = colsample_bytree,
                          reg_lambda = reg_lambda, alpha = alpha, 
-                         seed = seed)
+                         seed = seed, n_jobs = -1)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=5,
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -651,7 +723,7 @@ def obj_boost(n_estimators, eta, gamma,
     
 # Define the search space #
 pbounds = {
-    'n_estimators': (1, 1000),
+    'n_estimators': (1, 2000),
     'eta': (0, 1),
     'gamma': (0, 5),
     'max_depth': (2, 10),
@@ -668,7 +740,7 @@ optimizer = BayesianOptimization(
 
 
 # Call maximizer #
-optimizer.maximize(init_points = 50, n_iter = 200)
+optimizer.maximize(init_points = 50, n_iter = 450)
 
 
 # Pull best info #
@@ -686,4 +758,179 @@ final = final.append(
 final = final.sort_values('RMSE')
 
 
+#############################
+#### K-Nearest Neighbors ####
+#############################
+
+# Define objective function for K-Nearest Neighbors #
+def obj_knn(n_neighbors, weights, algorithm,
+            leaf_size, p):
+    
+    # Variation on weights #
+    if weights <= 0.5:
+        weights = 'uniform'
+    else:
+        weights = 'distance'
+    
+    # Variation on algorithm #
+    if algorithm <= 1.0:
+        algorithm = 'auto'
+    elif algorithm <= 2.0:
+        algorithm = 'ball_tree'
+    elif algorithm <= 3.0:
+        algorithm = 'kd_tree'
+    else:
+        algorithm = 'brute'
+    
+    # Variation on p #
+    if p <= 1.0:
+        p = 1
+    else:
+        p = 2
+    
+    # Instantiate model #
+    model = KNeighborsRegressor(n_neighbors =  int(n_neighbors), weights = weights,
+                                algorithm = algorithm, leaf_size = int(leaf_size), p = p)
+    
+    # Cross validation and mean MSE #
+    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+                            scoring='neg_mean_squared_error').mean()
+    
+    # Return error #
+    return error
+    
+
+# Define search space #
+pbounds = {
+    'n_neighbors': (2, 20),
+    'weights': (0, 1),
+    'algorithm': (0, 4),
+    'leaf_size': (2, 50),
+    'p': (0, 2)
+}
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(
+    f=obj_knn, pbounds=pbounds, random_state=seed)
+
+
+# Call maximizer #
+optimizer.maximize(init_points = 50, n_iter = 450)
+
+
+# Pull best info #
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'KNN Reg',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
+
+
+########################
+#### Neural Network ####
+########################
+
+# Define objective function for network #
+def obj_net(batch_size, epochs, optimizer,
+            learning_rate, activation, num_nodes,
+            num_hidden_layers):
+    
+
+    # Set optimizer #
+    if optimizer <= 0.25:
+        optimizer = optimizers.Adam(learning_rate=learning_rate)
+        
+    elif optimizer <= 0.50:
+        optimizer = optimizers.RMSprop(learning_rate=learning_rate)
+        
+    elif optimizer <= 0.75:
+        optimizer = optimizers.SGD(learning_rate = learning_rate)
+        
+    else:
+        optimizer = optimizers.Adagrad(learning_rate=learning_rate)
+        
+    # Set activation function #
+    if activation <= 0.25:
+        activation = 'relu'
+        
+    elif activation <= 0.5:
+       activation = 'sigmoid'
+       
+    elif  activation <= 0.75:
+       activation = 'tanh'
+       
+    else:
+       activation = 'elu'
+       
+    # Instantiate model
+    model = Sequential()
+    
+    # Set input layer #
+    model.add(Dense(int(num_nodes), activation = activation, 
+                    input_shape = (X_train.shape[1],)))
+    
+    # Set hidden layer with batch normalizer #
+    for _ in range(int(num_hidden_layers)):
+        model.add(Dense(int(num_nodes), activation = activation))
+        model.add(BatchNormalization())
+    
+    # Add output layer #
+    model.add(Dense(1))
+    
+    # Set compiler #
+    model.compile(optimizer = optimizer, loss = 'mean_squared_error')
+    
+    reg = KerasRegressor(build_fn = lambda: model, 
+                         batch_size = int(batch_size),
+                         epochs = int(epochs))
+
+    # Cross validation and mean MSE #
+    error = cross_val_score(reg, X_train, np.ravel(y_log), cv=cv,
+                        scoring='neg_mean_squared_error').mean()
+
+    # Return error #
+    return error
+
+# Define search space #
+pbounds = {
+    'batch_size': (73, 1460),
+    'epochs': (5, 100),
+    'optimizer': (0, 1),
+    'learning_rate': (0.000001, 0.5),
+    'num_nodes': (1, 200),
+    'num_hidden_layers': (1, 100),
+    'activation': (0, 1)
+}
+
+
+# Set the optimizer #
+optimizer = BayesianOptimization(f=obj_net, pbounds=pbounds,
+                                 random_state=1)
+
+
+# Call the maximizer #
+optimizer.maximize(init_points=50, n_iter=450)
+
+
+# Pull best info #
+best_hyperparameters = optimizer.max['params']
+best_accuracy = optimizer.max['target']
+
+
+# Fill comparison matrix #
+final = final.append(
+    {'Model' : 'Neural Net',
+     'RMSE': np.sqrt(best_mse * -1),
+     'hypers': best_hypers},
+    ignore_index = True
+   )
+final = final.sort_values('RMSE')
 
