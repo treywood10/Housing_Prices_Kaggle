@@ -7,7 +7,7 @@ https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/
 """
 
 # Libraries #
-from math import ceil, exp, sqrt
+from math import ceil
 import pandas as pd
 import numpy as np
 import random as ran
@@ -19,7 +19,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.feature_selection import SelectKBest, mutual_info_regression
 from sklearn.linear_model import Ridge, Lasso, ElasticNet
 from bayes_opt import BayesianOptimization
-from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.svm import SVR
 from sklearn.ensemble import RandomForestRegressor as RFR
 from xgboost import XGBRegressor
@@ -31,8 +31,9 @@ from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
 
 
 # Random draw of seed for random state #
-seed = int(ran.uniform(1, 9999))
-ran.seed(seed)
+#seed = int(ran.uniform(1, 9999))
+''' Got 3521 '''
+seed = 3521
 
 
 # Set mnumber of cross folds #
@@ -53,7 +54,7 @@ missing = X.isnull().sum().sort_values(ascending = False)
 
 
 # Make matrix to compare models #
-final = pd.DataFrame(columns = ['Model', 'RMSE', 'hypers'])
+train_compare = pd.DataFrame(columns = ['Model', 'RMSE', 'hypers'])
 
 
 ################################
@@ -146,26 +147,40 @@ del mean_legend, mean_value, median_legend, median_value
 #### Preprocessing ####
 #######################
 
+# Split into train and validation sets #
+X_train, X_val, y_train, y_val = train_test_split(X, y_log, test_size = 0.25, 
+                                                  random_state = seed)
+
 # Mask of numerical features #
-numeric_feats = X.select_dtypes(include = ['int64', 'float64']).columns
+numeric_feats = X_train.select_dtypes(include = ['int64', 'float64']).columns
 
 
 # Mask categorical features #
-cat_feats = X.select_dtypes(include = ['object']).columns
+cat_feats = X_train.select_dtypes(include = ['object']).columns
 
 
 # Encode object variables #
 ord_enc = OrdinalEncoder(handle_unknown = 'use_encoded_value', unknown_value=np.nan)
-X[cat_feats] = ord_enc.fit_transform(X[cat_feats])
+X_train[cat_feats] = ord_enc.fit_transform(X_train[cat_feats])
+
+
+# Transform X_val with encoder #
+X_val[cat_feats] = ord_enc.transform(X_val[cat_feats])
 
 
 # KNN Imputer #
 knn_im = KNNImputer(n_neighbors = 10, weights = 'distance')
-X_imp = pd.DataFrame(knn_im.fit_transform(X), columns = X.columns)
+X_train_imp = pd.DataFrame(knn_im.fit_transform(X_train), columns = X_train.columns)
+
+
+# KNN Imputer for X_val #
+X_val_imp = pd.DataFrame(knn_im.transform(X_val), columns = X_val.columns)
 
 
 # Variables need to be made integer #
-X_imp[['Electrical', 'MasVnrType']] = X_imp[['Electrical', 'MasVnrType']]\
+X_train_imp[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']] = X_train_imp[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']]\
+                                        .apply(lambda x: x.apply(ceil))
+X_val_imp[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']] = X_val_imp[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']]\
                                         .apply(lambda x: x.apply(ceil))
 
 
@@ -174,7 +189,7 @@ X_imp[['Electrical', 'MasVnrType']] = X_imp[['Electrical', 'MasVnrType']]\
 ##########################
 
 # Correlation of numeric feats and target #
-corr_val = pd.concat([X_imp[numeric_feats], y], axis =1).corr()['SalePrice']
+corr_val = pd.concat([X_train_imp[numeric_feats], y_train], axis =1).corr()['SalePrice']
 
 
 # Mask of features with high correlation to target #
@@ -184,12 +199,12 @@ select_num.remove('SalePrice')
 
 # Get mutual information of categorical features and outcome #
 fs = SelectKBest(score_func = mutual_info_regression, k = 'all')
-fs.fit(X_imp[cat_feats], np.ravel(y_log))
+fs.fit(X_train_imp[cat_feats], np.ravel(y_train))
 
 
 # Sort the scores and corresponding feature names in descending order
 sorted_scores, sorted_features = zip(*sorted(zip(fs.scores_,
-                                                 X_imp[cat_feats].columns),
+                                                 X_train_imp[cat_feats].columns),
                                              reverse=True))
 
 
@@ -202,7 +217,8 @@ selected_feats = select_num + top_20_cat_features
 
 
 # DF of only selected features #
-X_imp = X_imp[selected_feats]
+X_train_imp = X_train_imp[selected_feats]
+X_val_imp = X_val_imp[selected_feats]
 del corr_val, fs, sorted_features, sorted_scores
 
 
@@ -228,8 +244,8 @@ processor = ColumnTransformer(
     remainder = 'passthrough')
 
 
-# Apply processor #
-temp = processor.fit_transform(X_imp)
+# Apply processor to training data #
+temp = processor.fit_transform(X_train_imp)
 
 
 # Get categorical feature names #
@@ -243,8 +259,25 @@ labels = select_num + enc_cat_features
 
 # Make df of processed data #
 X_train = pd.DataFrame(temp, columns = labels)
-del missing, temp, train, X, X_imp
+del temp
 
+
+# Apply processor to validation data #
+temp = processor.transform(X_val_imp)
+
+
+# Get categorical feature names #
+enc_cat_features = list(processor.named_transformers_['cat']['encode']\
+                        .get_feature_names_out())
+
+
+# Concat label names #
+labels = select_num + enc_cat_features 
+
+
+# Make df of processed data #
+X_val = pd.DataFrame(temp, columns = labels)
+del temp, y_log, X_val_imp, X_train_imp
 
 ###############
 #### Ridge ####
@@ -301,7 +334,7 @@ def obj_ridge(alpha, fit_intercept, solver):
                   max_iter = 20000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, y_log, cv=cv,
+    error = cross_val_score(model, X_train, y_train, cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -329,13 +362,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'Ridge',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
 
 ###############
@@ -385,7 +418,7 @@ def obj_lasso(alpha, fit_intercept,
                   random_state = seed, max_iter = 20000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, y_log, cv=cv,
+    error = cross_val_score(model, X_train, y_train, cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -414,13 +447,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'Lasso',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
 
 ################################
@@ -447,7 +480,7 @@ def obj_net(alpha, l1_ratio, fit_intercept,
                        max_iter = 20000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+    error = cross_val_score(model, X_train, np.ravel(y_train), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -477,13 +510,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'ElasticNet',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE') 
+train_compare = train_compare.sort_values('RMSE') 
 
 
 ###################################
@@ -546,7 +579,7 @@ def obj_SVR(kernel, degree,
                 max_iter = 50000)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+    error = cross_val_score(model, X_train, np.ravel(y_train), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -579,13 +612,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'SVR',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
 
 ########################
@@ -652,7 +685,7 @@ def obj_RF(n_estimators, criterion,
                 n_jobs = -1, random_state = seed)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+    error = cross_val_score(model, X_train, np.ravel(y_train), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -686,13 +719,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'Random Forest',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
 
 ############################
@@ -714,7 +747,7 @@ def obj_boost(n_estimators, eta, gamma,
                          seed = seed, n_jobs = -1)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+    error = cross_val_score(model, X_train, np.ravel(y_train), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -749,13 +782,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'XGBoost Reg',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
 
 #############################
@@ -793,7 +826,7 @@ def obj_knn(n_neighbors, weights, algorithm,
                                 algorithm = algorithm, leaf_size = int(leaf_size), p = p)
     
     # Cross validation and mean MSE #
-    error = cross_val_score(model, X_train, np.ravel(y_log), cv=cv,
+    error = cross_val_score(model, X_train, np.ravel(y_train), cv=cv,
                             scoring='neg_mean_squared_error').mean()
     
     # Return error #
@@ -825,13 +858,13 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'KNN Reg',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
 
 ########################
@@ -893,7 +926,7 @@ def obj_net(batch_size, epochs, optimizer,
                          epochs = int(epochs))
 
     # Cross validation and mean MSE #
-    error = cross_val_score(reg, X_train, np.ravel(y_log), cv=cv,
+    error = cross_val_score(reg, X_train, np.ravel(y_train), cv=cv,
                         scoring='neg_mean_squared_error').mean()
 
     # Return error #
@@ -926,11 +959,11 @@ best_accuracy = optimizer.max['target']
 
 
 # Fill comparison matrix #
-final = final.append(
+train_compare = train_compare.append(
     {'Model' : 'Neural Net',
      'RMSE': np.sqrt(best_mse * -1),
      'hypers': best_hypers},
     ignore_index = True
    )
-final = final.sort_values('RMSE')
+train_compare = train_compare.sort_values('RMSE')
 
