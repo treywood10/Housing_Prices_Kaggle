@@ -25,15 +25,16 @@ from sklearn.ensemble import RandomForestRegressor as RFR
 from xgboost import XGBRegressor
 from sklearn.neighbors import KNeighborsRegressor
 from tensorflow.keras import Sequential
-from tensorflow.keras.layers import Dense, BatchNormalization
+from tensorflow.keras.layers import Dense, BatchNormalization, Dropout
 from tensorflow.keras import optimizers
-from tensorflow.keras.wrappers.scikit_learn import KerasRegressor
+from scikeras.wrappers import KerasRegressor
+from tensorflow.keras.callbacks import EarlyStopping
 
 
 # Random draw of seed for random state #
 #seed = int(ran.uniform(1, 9999))
-''' Got 3521 '''
-seed = 3521
+''' Got 2095 '''
+seed = 2095
 
 
 # Set mnumber of cross folds #
@@ -331,7 +332,7 @@ def obj_ridge(alpha, fit_intercept, solver):
     
     # Instantiate ridge model #
     model = Ridge(alpha=alpha, fit_intercept=fit_intercept, solver=solver,
-                  max_iter = 20000)
+                  max_iter = 20000, random_state=seed)
     
     # Cross validation and mean MSE #
     error = cross_val_score(model, X_train, y_train, cv=cv,
@@ -872,37 +873,24 @@ train_compare = train_compare.sort_values('RMSE')
 ########################
 
 # Define objective function for network #
-def obj_net(batch_size, epochs, optimizer,
-            learning_rate, activation, num_nodes,
-            num_hidden_layers):
+def obj_net(batch_size, epochs,
+             activation, num_nodes,
+            num_hidden_layers,
+            learning_rate,
+            rate):
     
-
-    # Set optimizer #
-    if optimizer <= 0.25:
-        optimizer = optimizers.Adam(learning_rate=learning_rate)
-        
-    elif optimizer <= 0.50:
-        optimizer = optimizers.RMSprop(learning_rate=learning_rate)
-        
-    elif optimizer <= 0.75:
-        optimizer = optimizers.SGD(learning_rate = learning_rate)
-        
-    else:
-        optimizer = optimizers.Adagrad(learning_rate=learning_rate)
         
     # Set activation function #
-    if activation <= 0.25:
+    if activation <= 0.33:
         activation = 'relu'
         
-    elif activation <= 0.5:
+    elif activation <= 0.66:
        activation = 'sigmoid'
        
-    elif  activation <= 0.75:
+    else:
        activation = 'tanh'
        
-    else:
-       activation = 'elu'
-       
+
     # Instantiate model
     model = Sequential()
     
@@ -914,16 +902,27 @@ def obj_net(batch_size, epochs, optimizer,
     for _ in range(int(num_hidden_layers)):
         model.add(Dense(int(num_nodes), activation = activation))
         model.add(BatchNormalization())
+        model.add(Dropout(rate = rate, seed = seed))
     
     # Add output layer #
     model.add(Dense(1))
     
     # Set compiler #
-    model.compile(optimizer = optimizer, loss = 'mean_squared_error')
+    model.compile(optimizer = optimizers.Adam(learning_rate = learning_rate),
+                  loss = 'mean_squared_error')
     
-    reg = KerasRegressor(build_fn = lambda: model, 
+    # Set early stopping #
+    early_stopping = EarlyStopping(monitor='val_loss', 
+                                   patience=15, 
+                                   restore_best_weights=True)
+    
+    # Create model #
+    reg = KerasRegressor(model = lambda : model,
                          batch_size = int(batch_size),
-                         epochs = int(epochs))
+                         epochs = int(epochs),
+                         validation_split = 0.2,
+                         callbacks = [early_stopping],
+                         random_state = seed)
 
     # Cross validation and mean MSE #
     error = cross_val_score(reg, X_train, np.ravel(y_train), cv=cv,
@@ -934,13 +933,13 @@ def obj_net(batch_size, epochs, optimizer,
 
 # Define search space #
 pbounds = {
-    'batch_size': (73, 1460),
-    'epochs': (5, 100),
-    'optimizer': (0, 1),
-    'learning_rate': (0.000001, 0.5),
-    'num_nodes': (1, 200),
-    'num_hidden_layers': (1, 100),
-    'activation': (0, 1)
+    'batch_size': (50, 1460),
+    'epochs': (5, 500),
+    'learning_rate': (0.001, 0.15),
+    'num_nodes': (5, 85),
+    'num_hidden_layers': (2, 20),
+    'activation': (0, 1),
+    'rate': (0.0, 0.9)
 }
 
 
@@ -954,8 +953,8 @@ optimizer.maximize(init_points=50, n_iter=450)
 
 
 # Pull best info #
-best_hyperparameters = optimizer.max['params']
-best_accuracy = optimizer.max['target']
+best_hypers = optimizer.max['params']
+best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
