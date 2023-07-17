@@ -29,12 +29,22 @@ from tensorflow.keras.layers import Dense, BatchNormalization, Dropout
 from tensorflow.keras import optimizers
 from scikeras.wrappers import KerasRegressor
 from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.metrics import mean_squared_error
 
 
 # Random draw of seed for random state #
 #seed = int(ran.uniform(1, 9999))
 ''' Got 2095 '''
 seed = 2095
+ran.seed(seed)
+
+import os
+os.environ['PYTHONHASHSEED'] = str(seed)
+
+np.random.seed(seed)
+
+import tensorflow as tf
+tf.random.set_seed(seed)
 
 
 # Set mnumber of cross folds #
@@ -133,12 +143,12 @@ plt.axvline(mean_value.item(), color='red', linestyle='--', label='Mean')
 plt.axvline(median_value.item(), color='blue', linestyle='--', label='Median')
 plt.xlabel('Sale Price')
 plt.ylabel('Density')
-plt.title('Histogram of Target Variable')
+plt.title('Histogram of Target Variable with Natural Log Transformation')
 
 # Add the text to the legend
 mean_legend = plt.Line2D([], [], color='red', linestyle='--', label=f"Mean: {mean_value.item():.2f}")
 median_legend = plt.Line2D([], [], color='blue', linestyle='--', label=f"Median: {median_value.item():.2f}")
-plt.legend(handles=[mean_legend, median_legend])
+plt.legend(handles=[mean_legend, median_legend]) 
 
 plt.show()
 del mean_legend, mean_value, median_legend, median_value
@@ -344,7 +354,7 @@ def obj_ridge(alpha, fit_intercept, solver):
 
 # Define search space #
 pbounds = {
-    'alpha': (0.0000001, 100),
+    'alpha': (0.00000001, 100),
     'fit_intercept': (0, 1),
     'solver': (0, 8),
 }
@@ -362,13 +372,35 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace solver with string #
+if best_hypers['solver'] <= 1.0:
+    best_hypers['solver']  = 'auto'
+elif best_hypers['solver']  <= 2.0:
+    best_hypers['solver']  = 'svd'
+elif best_hypers['solver']  <= 3.0:
+    best_hypers['solver']  = 'cholesky'
+elif best_hypers['solver']  <= 4.0:
+    best_hypers['solver']  = 'lsqr'
+elif best_hypers['solver']  <= 5.0:
+    best_hypers['solver']  = 'sparse_cg'
+elif best_hypers['solver']  <= 6.0:
+    best_hypers['solver']  = 'sag'
+else:
+    best_hypers['solver']  = 'saga'
+    
+
+# Replace with intercept boolean #
+best_hypers['fit_intercept'] = bool(round(best_hypers['fit_intercept']))
+
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'Ridge',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'Ridge',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
+
+# Sort by smallest RMSE #
 train_compare = train_compare.sort_values('RMSE')
 
 
@@ -447,13 +479,23 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace selection with string #
+if best_hypers['selection'] <= 0.5:
+    best_hypers['selection'] = 'cyclic'
+else:
+    best_hypers['selection'] = 'random'
+    
+
+# Replace with intercept boolean #
+best_hypers['fit_intercept'] = bool(round(best_hypers['fit_intercept']))
+
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'Lasso',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'Lasso',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE')
 
 
@@ -464,6 +506,28 @@ train_compare = train_compare.sort_values('RMSE')
 # Define objective function for Net #
 def obj_net(alpha, l1_ratio, fit_intercept,
             selection):
+    """
+    The objective of this function is to minimize the error
+    of the elastic net model. 
+
+    Parameters
+    ----------
+    alpha : Float
+        Constant the multiplies the penalty terms. 0 is equal to OLS.
+    l1_ratio : Float
+        Ratio of l1 or l2 regularization. 0 is l2. 1 is l1.
+    fit_intercept : bool
+        Option to fit an intercept.
+    selection : String
+        Specify how coefficients are updated across iterations. 
+
+    Returns
+    -------
+    error : Float
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
     
     # Vary fit intercept #
     fit_intercept = bool(round(fit_intercept))
@@ -489,8 +553,8 @@ def obj_net(alpha, l1_ratio, fit_intercept,
 
 # Define search space #
 pbounds = {
-    'alpha': (0.00001, 5),
-    'l1_ratio': (0.0001, 0.999),
+    'alpha': (0.00001, 100),
+    'l1_ratio': (0.001, 0.99),
     'fit_intercept': (0, 1),
     'selection': (0, 1)
 }   
@@ -510,13 +574,23 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace selection with string #
+if best_hypers['selection'] <= 0.5:
+    best_hypers['selection']  = 'cyclic'
+else:
+    best_hypers['selection']  = 'random'
+    
+    
+# Replace with intercept boolean #
+best_hypers['fit_intercept'] = bool(round(best_hypers['fit_intercept']))
+
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'ElasticNet',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'Elastic_Net',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE') 
 
 
@@ -529,7 +603,8 @@ def obj_SVR(kernel, degree,
             gamma, C, epsilon, 
             shrinking):
     """
-    
+    The objective of this function is to minimze the erro
+    of the support vector regression.
 
     Parameters
     ----------
@@ -612,18 +687,35 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace kernel with string #
+if best_hypers['kernel'] <= 1:
+    best_hypers['kernel'] = 'linear'
+elif best_hypers['kernel'] <= 2:
+    best_hypers['kernel'] = 'poly'
+elif best_hypers['kernel'] <= 3:
+    best_hypers['kernel'] = 'rbf'
+else:
+    best_hypers['kernel'] = 'sigmoid'
+    
+
+# Replace gamma with string #
+if best_hypers['gamma'] <= 0.5:
+    best_hypers['gamma'] = 'scale'
+else:
+    best_hypers['gamma'] = 'auto'
+
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'SVR',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'SVR',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE')
 
 
 ########################
-#### Random Forrest ####
+#### Random Forest ####
 ########################
 
 # Define objective function for random forest #
@@ -697,8 +789,8 @@ def obj_RF(n_estimators, criterion,
 pbounds = {
     'n_estimators': (1, 1000),
     'criterion': (0, 4),
-    'min_samples_split': (0.01, .90),
-    'min_samples_leaf': (0.01, .90),
+    'min_samples_split': (0.01, .70),
+    'min_samples_leaf': (0.01, .70),
     'max_features': (0, 1),
     'bootstrap': (0, 1),
     'min_impurity_decrease': (0.001, 0.4)
@@ -711,7 +803,7 @@ optimizer = BayesianOptimization(
 
 
 # Call maximizer #
-optimizer.maximize(init_points = 50, n_iter = 450)
+optimizer.maximize(init_points = 50, n_iter = 450,)
 
 
 # Pull best info #
@@ -719,13 +811,30 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace criterion with string #
+if best_hypers['criterion'] <= 1.0:
+    best_hypers['criterion'] = 'squared_error'
+elif best_hypers['criterion'] <= 2.0:
+    best_hypers['criterion'] = 'absolute_error'
+elif best_hypers['criterion'] <= 3.0:
+    best_hypers['criterion'] = 'friedman_mse'
+else:
+    best_hypers['criterion'] = 'poisson'
+        
+
+# Replace max features with string #
+if best_hypers['max_features'] <= 0.5:
+    best_hypers['max_features'] = 'sqrt'
+else:
+    best_hypers['max_features'] = 'log2'
+        
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'Random Forest',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'Random_Forest',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE')
 
 
@@ -737,15 +846,43 @@ train_compare = train_compare.sort_values('RMSE')
 def obj_boost(n_estimators, eta, gamma, 
               max_depth, subsample, colsample_bytree,
               reg_lambda, alpha):
-    
-    
+    """
+    The objective of this function is to minimze the error
+    of the XGBoosted random forest regression. 
+
+    Parameters
+    ----------
+    n_estimators : Integer
+        Number of trees to estimate.
+    eta : Float
+        Feature weight shrinkage that prevents overfitting.
+    gamma : Float
+        Min loss reduction needed to make partition on a leaf node.
+    max_depth : Int
+        Maximum depth of a tree. Deeper trees increase overfitting.
+    subsample : Float
+        Subsample of the dataset to use in tree.
+    colsample_bytree : Float
+        Subsample of columns to use in each tree.
+    reg_lambda : Float
+        L2 regularization on weights. Higher values make models more conservative.
+    alpha : Float
+        L1 regularization on weights. Higher values make models more conservative.
+
+    Returns
+    -------
+    error : Float
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
     
     # instantiate XGBoost #
     model = XGBRegressor(n_estimators = int(n_estimators), eta = eta,
                          gamma = gamma, max_depth = int(max_depth),
                          subsample = subsample, colsample_bytree = colsample_bytree,
                          reg_lambda = reg_lambda, alpha = alpha, 
-                         seed = seed, n_jobs = -1)
+                         seed = seed, n_jobs = 4)
     
     # Cross validation and mean MSE #
     error = cross_val_score(model, X_train, np.ravel(y_train), cv=cv,
@@ -760,11 +897,11 @@ pbounds = {
     'n_estimators': (1, 2000),
     'eta': (0, 1),
     'gamma': (0, 5),
-    'max_depth': (2, 10),
+    'max_depth': (2, 7),
     'subsample': (0.5, 1),
-    'colsample_bytree': (0.2, 1),
-    'reg_lambda': (0, 10),
-    'alpha': (0, 10)
+    'colsample_bytree': (0.2, 0.9),
+    'reg_lambda': (0.05, 10),
+    'alpha': (0.05, 10)
 }
 
 
@@ -783,12 +920,11 @@ best_mse = optimizer.max['target']
 
 
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'XGBoost Reg',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'XGBoost_Reg',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE')
 
 
@@ -799,6 +935,30 @@ train_compare = train_compare.sort_values('RMSE')
 # Define objective function for K-Nearest Neighbors #
 def obj_knn(n_neighbors, weights, algorithm,
             leaf_size, p):
+    """
+    This objective function minimzes the error for k-nearest
+    neighbors regression.
+
+    Parameters
+    ----------
+    n_neighbors : int
+        Number of neighbors to use.
+    weights : String
+        Weight function used in prediction.
+    algorithm : String
+        Process used to compute the nearest neighbors.
+    leaf_size : int
+        Leaf size passed to specific algorithms.
+    p : int
+        Power parameter for Minkowski metric.
+
+    Returns
+    -------
+    error : Float
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
     
     # Variation on weights #
     if weights <= 0.5:
@@ -819,6 +979,8 @@ def obj_knn(n_neighbors, weights, algorithm,
     # Variation on p #
     if p <= 1.0:
         p = 1
+    elif p <= 1.0 and algorithm != 'brute':
+        p = 1
     else:
         p = 2
     
@@ -836,11 +998,11 @@ def obj_knn(n_neighbors, weights, algorithm,
 
 # Define search space #
 pbounds = {
-    'n_neighbors': (2, 20),
+    'n_neighbors': (2, 10),
     'weights': (0, 1),
     'algorithm': (0, 4),
     'leaf_size': (2, 50),
-    'p': (0, 2)
+    'p': (0.001, 2)
 }
 
 
@@ -858,13 +1020,40 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace weights with string #
+if best_hypers['weights'] <= 0.5:
+    best_hypers['weights'] = 'uniform'
+else:
+    best_hypers['weights'] = 'distance'
+    
+    
+# Replace algorithm with string #
+if best_hypers['algorithm'] <= 1.0:
+    best_hypers['algorithm'] = 'auto'
+elif best_hypers['algorithm'] <= 2.0:
+    best_hypers['algorithm'] = 'ball_tree'
+elif best_hypers['algorithm'] <= 3.0:
+    best_hypers['algorithm'] = 'kd_tree'
+else:
+    best_hypers['algorithm'] = 'brute'
+    
+
+# Replace p #
+if best_hypers['p'] <= 1.0:
+    best_hypers['p'] = 1
+elif best_hypers['p'] <= 1.0 and best_hypers['algorithm'] != 'brute':
+    best_hypers['p'] = 1
+else:
+    best_hypers['p'] = 2
+    
+
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'KNN Reg',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'KNN_Reg',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE')
 
 
@@ -873,12 +1062,48 @@ train_compare = train_compare.sort_values('RMSE')
 ########################
 
 # Define objective function for network #
-def obj_net(batch_size, epochs,
-             activation, num_nodes,
-            num_hidden_layers,
-            learning_rate,
-            rate):
+def obj_net(batch_size, epochs, activation, num_nodes,
+            num_hidden_layers, learning_rate, rate, optimizer):
+    """
+    The objective of this function is to minimize the error of the
+    neural network
+
+    Parameters
+    ----------
+    batch_size : Int
+        The number of cases to include in each batch.
+    epochs : Int
+        Number of runs through the data when updating weights.
+    activation : String
+        Type of activation function for the layer.
+    num_nodes : Int
+        Number of nodes to include in the hidden layer.
+    num_hidden_layers : Int
+        Number of hideen layers in the model.
+    learning_rate : Float
+        How much to change the model with each model update.
+    rate : Float
+        Dropout rate for each hidden layer to prevent overfitting.
+    optimizer : String
+        Optimizer to use for the model.
+
+    Returns
+    -------
+    error : Float
+        Cross validation returns root mean error that is later
+        convereted into RMSE in the comparison frame.
+
+    """
     
+    # Set Optimizer #
+    if optimizer <= 0.33:
+        optimizer = optimizers.Adam(learning_rate = learning_rate)
+    
+    elif optimizer <= 0.66:
+        optimizer = optimizers.Adagrad(learning_rate = learning_rate)
+    
+    else:
+        optimizer = optimizers.RMSprop(learning_rate = learning_rate)
         
     # Set activation function #
     if activation <= 0.33:
@@ -890,7 +1115,6 @@ def obj_net(batch_size, epochs,
     else:
        activation = 'tanh'
        
-
     # Instantiate model
     model = Sequential()
     
@@ -908,7 +1132,7 @@ def obj_net(batch_size, epochs,
     model.add(Dense(1))
     
     # Set compiler #
-    model.compile(optimizer = optimizers.Adam(learning_rate = learning_rate),
+    model.compile(optimizer = optimizer,
                   loss = 'mean_squared_error')
     
     # Set early stopping #
@@ -936,16 +1160,17 @@ pbounds = {
     'batch_size': (50, 1460),
     'epochs': (5, 500),
     'learning_rate': (0.001, 0.15),
-    'num_nodes': (5, 85),
+    'num_nodes': (5, 80),
     'num_hidden_layers': (2, 20),
     'activation': (0, 1),
-    'rate': (0.0, 0.9)
+    'rate': (0.0, 0.9),
+    'optimizer': (0, 1)
 }
 
 
 # Set the optimizer #
 optimizer = BayesianOptimization(f=obj_net, pbounds=pbounds,
-                                 random_state=1)
+                                 random_state=seed)
 
 
 # Call the maximizer #
@@ -957,12 +1182,270 @@ best_hypers = optimizer.max['params']
 best_mse = optimizer.max['target']
 
 
+# Replace optimizer and learning rate #
+if best_hypers['optimizer'] <= 0.33:
+    best_hypers['optimizer'] = optimizers.Adam(learning_rate = best_hypers['learning_rate'])
+    
+elif best_hypers['optimizer'] <= 0.66:
+    best_hypers['optimizer'] = optimizers.Adagrad(learning_rate = best_hypers['learning_rate'])
+    
+else:
+    best_hypers['optimizer'] = optimizers.RMSprop(learning_rate = best_hypers['learning_rate'])
+    
+    
+# Replace activation with string #
+if best_hypers['activation'] <= 0.33:
+    best_hypers['activation'] = 'relu'
+        
+elif best_hypers['activation'] <= 0.66:
+      best_hypers['activation'] = 'sigmoid'
+       
+else:
+     best_hypers['activation'] = 'tanh'
+
+
 # Fill comparison matrix #
-train_compare = train_compare.append(
-    {'Model' : 'Neural Net',
-     'RMSE': np.sqrt(best_mse * -1),
-     'hypers': best_hypers},
-    ignore_index = True
-   )
+train_compare = pd.concat([train_compare,
+                           pd.DataFrame({'Model' : 'Neural_Net',
+                            'RMSE': np.sqrt(best_mse * -1),
+                            'hypers': [best_hypers]})], ignore_index = True)
+
 train_compare = train_compare.sort_values('RMSE')
 
+
+###################################
+#### Predict on Validation Set ####
+###################################
+
+ # Ridge #   
+ridge_dict = train_compare.loc[train_compare['Model'] == 'Ridge', 'hypers'].values[0]
+
+
+mod_ridge = Ridge(alpha = ridge_dict['alpha'],
+                  fit_intercept =ridge_dict['fit_intercept'],
+                  solver = ridge_dict['solver'],
+                  random_state = seed)
+
+mod_ridge.fit(X_train, y_train)
+
+
+# Lasso #
+lasso_dict = train_compare.loc[train_compare['Model'] == 'Lasso', 'hypers'].values[0]
+
+mod_lasso = Lasso(alpha = lasso_dict['alpha'],
+                  fit_intercept = bool(lasso_dict['fit_intercept']),
+                  selection = lasso_dict['selection'],
+                  random_state = seed,
+                  max_iter = 20000)
+
+mod_lasso.fit(X_train, y_train)
+
+
+# Elastic Net #
+elastic_dict = train_compare.loc[train_compare['Model'] == 'Elastic_Net', 'hypers'].values[0]
+
+mod_elastic = ElasticNet(alpha = elastic_dict['alpha'],
+                         fit_intercept = bool(elastic_dict['fit_intercept']),
+                         l1_ratio = elastic_dict['l1_ratio'],
+                         selection = elastic_dict['selection'],
+                         max_iter = 20000,
+                         random_state = seed)
+
+mod_elastic.fit(X_train, y_train)
+
+
+# SVR #
+svr_dict = train_compare.loc[train_compare['Model'] == 'SVR', 'hypers'].values[0]
+
+mod_SVR = SVR(C = svr_dict['C'],
+              degree = int(svr_dict['degree']),
+              epsilon = svr_dict['epsilon'],
+              gamma = svr_dict['gamma'],
+              kernel = svr_dict['kernel'],
+              shrinking = bool(svr_dict['kernel']))
+
+mod_SVR.fit(X_train, y_train)
+
+
+# Random Forest #
+rf_dict = train_compare.loc[train_compare['Model'] == 'Random_Forest', 'hypers'].values[0]
+
+mod_rf = RFR(bootstrap = bool(rf_dict['bootstrap']),
+             criterion = rf_dict['criterion'],
+             max_features = rf_dict['max_features'],
+             min_impurity_decrease = rf_dict['min_impurity_decrease'],
+             min_samples_leaf = rf_dict['min_samples_leaf'],
+             min_samples_split = rf_dict['min_samples_split'],
+             n_estimators = int(rf_dict['n_estimators']))
+
+mod_rf.fit(X_train, np.ravel(y_train))
+
+
+# XGBoost Regression #
+boost_dict = train_compare.loc[train_compare['Model'] == 'XGBoost_Reg', 'hypers'].values[0]
+
+mod_boost = XGBRegressor(alpha = boost_dict['alpha'],
+                         colsample_bytree = boost_dict['colsample_bytree'],
+                         eta = boost_dict['eta'],
+                         gamma = boost_dict['gamma'],
+                         max_depth = int(boost_dict['max_depth']),
+                         n_estimators = int(boost_dict['n_estimators']),
+                         reg_lambda = boost_dict['reg_lambda'],
+                         subsample = boost_dict['subsample'],
+                         random_state = seed,
+                         n_jobs = 3)
+
+mod_boost.fit(X_train, np.ravel(y_train))
+
+
+# K-Nearest #
+knn_dict = train_compare.loc[train_compare['Model'] == 'KNN_Reg', 'hypers'].values[0]
+
+mod_KNN = KNeighborsRegressor(algorithm = knn_dict['algorithm'],
+                              leaf_size = int(knn_dict['leaf_size']),
+                              n_neighbors = int(knn_dict['n_neighbors']),
+                              p = float(knn_dict['p']),
+                              weights = knn_dict['weights'])
+
+mod_KNN.fit(X_train, y_train)
+
+
+# Neutral Net #
+net_dict = train_compare.loc[train_compare['Model'] == 'Neural_Net', 'hypers'].values[0]
+
+
+mod_net = Sequential()
+
+mod_net.add(Dense(int(net_dict['num_nodes']), 
+                  activation = net_dict['activation'],
+                  input_shape = (X_train.shape[1],)))
+
+    
+# Set hidden layer with batch normalizer #
+for _ in range(int(net_dict['num_hidden_layers'])):
+    mod_net.add(Dense(int(net_dict['num_nodes']), activation = net_dict['activation']))
+    mod_net.add(BatchNormalization())
+    mod_net.add(Dropout(rate = net_dict['rate'], seed = seed))
+
+
+# Add output layer #
+mod_net.add(Dense(1))
+ 
+# Set compiler #
+mod_net.compile(optimizer = net_dict['optimizer'],
+              loss = 'mean_squared_error')
+
+mod_net.fit(X_train, np.ravel(y_train))
+
+
+# Make list of models #
+mod_list = [mod_ridge, mod_lasso, mod_elastic, mod_SVR, mod_rf, mod_boost, mod_KNN, mod_net]
+
+
+# Make matrix to compare models #
+val_compare = pd.DataFrame(columns = ['Model', 'RMSE'])
+    
+    
+# Loop model predictions on validation set #
+for x in mod_list:
+    pred = x.predict(X_val)
+    mse = mean_squared_error(y_val, pred)
+    rmse = np.sqrt(mse)
+    model_name = type(x).__name__
+    val_compare = pd.concat([val_compare,
+                             pd.DataFrame({'Model': [model_name],
+                                           'RMSE': [np.exp(rmse)]})],
+                            ignore_index = True)
+
+
+# Sort by RMSE #
+val_compare = val_compare.sort_values('RMSE')
+
+
+#########################
+#### Import Test Set ####
+#########################
+
+
+# Import test data #
+X_test = pd.read_csv('test.csv')
+
+
+# Drop ID #
+X_test = X_test.drop("Id", axis = 1)
+
+
+# Assign no pool (NP) to PoolQC #
+X_test['PoolQC'].fillna('NP', inplace = True)
+
+
+# Assign no feature (NF) to MiscFeature #
+X_test['MiscFeature'].fillna('NF', inplace = True)
+
+
+# Assign no ally (NAL) to Alley #
+X_test['Alley'].fillna('NAL', inplace = True)
+
+
+# Assign no fence (NF) to Fence #
+X_test['Fence'].fillna('NF', inplace = True)
+
+
+# Assign no fire place (NFP) to FireplaceQu #
+X_test['FireplaceQu'].fillna('NFP', inplace = True)
+
+
+# Assign no garage (NG) to GarageType #
+X_test['GarageType'].fillna('NG', inplace = True)
+
+
+# Fill garage variables with NG if no garage #
+garage = ['GarageYrBlt', 'GarageFinish', 'GarageQual', 'GarageCond']
+for x in garage:
+    X_test[x].fillna('NG', inplace = True)
+del x, garage
+
+
+# Fix GarageYrBlt since it was mixed type #
+X_test['GarageYrBlt'] =X_test['GarageYrBlt'].astype(str)
+
+
+# Fill basement varaibles with no basement (NB) #
+basement = ['BsmtExposure', 'BsmtFinType2', 'BsmtQual', 'BsmtCond', 'BsmtFinType1']
+for x in basement:
+    X_test[x].fillna('NB', inplace = True)
+del x, basement
+
+
+
+# Transform X_test with encoder #
+X_test[cat_feats] = ord_enc.transform(X_test[cat_feats])
+    
+
+# KNN Imputer for X_val #
+X_test = pd.DataFrame(knn_im.transform(X_test), columns = X_test.columns)
+
+
+# Variables need to be made integer #
+X_test[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']] = X_test[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']]\
+                                        .apply(lambda x: x.apply(ceil))
+
+
+X_test = X_test[selected_feats]
+
+
+# Apply processor to validation data #
+temp = processor.transform(X_test)
+
+
+# Get categorical feature names #
+enc_cat_features = list(processor.named_transformers_['cat']['encode']\
+                        .get_feature_names_out())
+
+
+# Concat label names #
+labels = select_num + enc_cat_features 
+
+
+# Make df of processed data #
+X_test = pd.DataFrame(temp, columns = labels)
