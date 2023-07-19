@@ -1062,7 +1062,7 @@ train_compare = train_compare.sort_values('RMSE')
 ########################
 
 # Define objective function for network #
-def obj_net(batch_size, epochs, activation, num_nodes,
+def obj_ner(batch_size, epochs, activation, num_nodes,
             num_hidden_layers, learning_rate, rate, optimizer):
     """
     The objective of this function is to minimize the error of the
@@ -1169,7 +1169,7 @@ pbounds = {
 
 
 # Set the optimizer #
-optimizer = BayesianOptimization(f=obj_net, pbounds=pbounds,
+optimizer = BayesianOptimization(f=obj_ner, pbounds=pbounds,
                                  random_state=seed)
 
 
@@ -1417,7 +1417,6 @@ for x in basement:
 del x, basement
 
 
-
 # Transform X_test with encoder #
 X_test[cat_feats] = ord_enc.transform(X_test[cat_feats])
     
@@ -1427,10 +1426,12 @@ X_test = pd.DataFrame(knn_im.transform(X_test), columns = X_test.columns)
 
 
 # Variables need to be made integer #
-X_test[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']] = X_test[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st']]\
+X_test[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st', 'Exterior2nd', 'KitchenQual', 'MSZoning', 'SaleType']] =\
+    X_test[['Electrical', 'MasVnrType', 'GarageYrBlt', 'Exterior1st', 'Exterior2nd', 'KitchenQual', 'MSZoning', 'SaleType']]\
                                         .apply(lambda x: x.apply(ceil))
 
 
+# Get pre-selected features #
 X_test = X_test[selected_feats]
 
 
