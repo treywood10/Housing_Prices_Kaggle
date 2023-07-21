@@ -1354,7 +1354,8 @@ for x in mod_list:
     model_name = type(x).__name__
     val_compare = pd.concat([val_compare,
                              pd.DataFrame({'Model': [model_name],
-                                           'RMSE': [np.exp(rmse)]})],
+                                           'RMSE': [np.exp(rmse)],
+                                           'Model_Specs': [x]})],
                             ignore_index = True)
 
 
@@ -1362,9 +1363,9 @@ for x in mod_list:
 val_compare = val_compare.sort_values('RMSE')
 
 
-#########################
-#### Import Test Set ####
-#########################
+#################################
+#### Import & Clean Test Set ####
+#################################
 
 
 # Import test data #
@@ -1450,3 +1451,11 @@ labels = select_num + enc_cat_features
 
 # Make df of processed data #
 X_test = pd.DataFrame(temp, columns = labels)
+
+
+#############################
+#### Predict On Test Set ####
+#############################
+
+# Pull best model from val_compare #
+
