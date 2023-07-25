@@ -1370,6 +1370,7 @@ val_compare = val_compare.sort_values('RMSE')
 
 # Import test data #
 X_test = pd.read_csv('test.csv')
+ids = X_test['Id']
 
 
 # Drop ID #
@@ -1458,4 +1459,20 @@ X_test = pd.DataFrame(temp, columns = labels)
 #############################
 
 # Pull best model from val_compare #
+best_model = val_compare.iloc[0]['Model_Specs']
 
+
+# Predict on test set #
+predict_test = best_model.predict(X_test)
+
+
+# Exponentiate to make into real dollars #
+predict_test = np.exp(predict_test)
+
+
+# Create new DataFrame with the IDs and the predicted sale prices #
+predictions_with_id = pd.DataFrame({'Id': ids, 'SalePrice': predict_test})
+
+
+# Save the predictions to a CSV file with the original IDs
+predictions_with_id.to_csv('predicted_sale_prices.csv', index=False)
